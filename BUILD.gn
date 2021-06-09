@@ -534,6 +534,8 @@ source_set("electron_lib") {
       "shell/browser/ui/gtk/app_indicator_icon.h",
       "shell/browser/ui/gtk/app_indicator_icon_menu.cc",
       "shell/browser/ui/gtk/app_indicator_icon_menu.h",
+      "shell/browser/ui/gtk/electron_desktop_window_tree_host_wayland.cc",
+      "shell/browser/ui/gtk/electron_desktop_window_tree_host_wayland.h",
       "shell/browser/ui/gtk/gtk_status_icon.cc",
       "shell/browser/ui/gtk/gtk_status_icon.h",
       "shell/browser/ui/gtk/menu_util.cc",

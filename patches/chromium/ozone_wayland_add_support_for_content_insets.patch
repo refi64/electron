@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ryan Gonzalez <rymg19@gmail.com>
+Date: Tue, 8 Jun 2021 18:36:28 -0500
+Subject: ozone/wayland: Add support for content insets
+
+This is included here at the moment because a more proper solution in
+upstream Chromium would be incredibly large.
+
+diff --git a/ui/ozone/platform/wayland/common/wayland_util.cc b/ui/ozone/platform/wayland/common/wayland_util.cc
+index 12b0e1170ef4904fdd55d88da300e70591b9c1f8..a41f66fa72c99c01715295494d19605df16b02d1 100644
+--- a/ui/ozone/platform/wayland/common/wayland_util.cc
++++ b/ui/ozone/platform/wayland/common/wayland_util.cc
+@@ -270,8 +270,8 @@ gfx::Rect TranslateWindowBoundsToParentDIP(ui::WaylandWindow* window,
+   DCHECK_EQ(window->window_scale(), parent_window->window_scale());
+   DCHECK_EQ(window->ui_scale(), parent_window->ui_scale());
+   return gfx::ScaleToRoundedRect(
+-      wl::TranslateBoundsToParentCoordinates(window->GetBounds(),
+-                                             parent_window->GetBounds()),
++      wl::TranslateBoundsToParentCoordinates(window->GetWindowBounds(),
++                                             parent_window->GetWindowBounds()),
+       1.0 / window->window_scale());
+ }
+ 
+diff --git a/ui/ozone/platform/wayland/host/wayland_popup.cc b/ui/ozone/platform/wayland/host/wayland_popup.cc
+index 24016a893956300381cc22a61c120b6b53cc8f5c..cb9a57ec3b22aeae5abcfdfa2bf3d8d49ee99f14 100644
+--- a/ui/ozone/platform/wayland/host/wayland_popup.cc
++++ b/ui/ozone/platform/wayland/host/wayland_popup.cc
+@@ -154,7 +154,7 @@ void WaylandPopup::HandlePopupConfigure(const gfx::Rect& bounds_dip) {
+     new_bounds_dip = gfx::ScaleToRoundedRect(
+         wl::TranslateBoundsToTopLevelCoordinates(
+             gfx::ScaleToRoundedRect(new_bounds_dip, window_scale()),
+-            parent_window()->GetBounds()),
++            parent_window()->GetWindowBounds()),
+         1.0 / window_scale());
+     DCHECK(new_bounds_dip.y() >= 0);
+   }
+diff --git a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+index 098faa4e2d06a1eaed46563834c0d36e6f1b5b12..80b0c8e36bc49fee74304892901c6ed087079884 100644
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -11,6 +11,8 @@
+ #include "build/chromeos_buildflags.h"
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "ui/base/hit_test.h"
++#include "ui/gfx/geometry/insets.h"
++#include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/native_widget_types.h"
+ #include "ui/ozone/platform/wayland/host/gtk_shell1.h"
+ #include "ui/ozone/platform/wayland/host/gtk_surface1.h"
+@@ -74,6 +76,16 @@ void WaylandToplevelWindow::ApplyPendingBounds() {
+   SetBoundsDip(pending_configures_.back().bounds_dip);
+ }
+ 
++void WaylandToplevelWindow::UpdateContentInsets(const gfx::Insets& insets) {
++  if (!shell_toplevel_ || content_insets_ == insets) {
++    return;
++  }
++
++  content_insets_ = insets;
++  UpdateWindowGeometry(
++      gfx::ScaleToRoundedRect(GetBounds(), 1.f / window_scale()));
++}
++
+ void WaylandToplevelWindow::DispatchHostWindowDragMovement(
+     int hittest,
+     const gfx::Point& pointer_location_in_px) {
+@@ -250,6 +262,22 @@ absl::optional<std::vector<gfx::Rect>> WaylandToplevelWindow::GetWindowShape()
+   return window_shape_in_dips_;
+ }
+ 
++gfx::Rect WaylandToplevelWindow::GetWindowBounds() const {
++  gfx::Rect bounds(GetBounds());
++  bounds.Inset(gfx::ScaleToRoundedInsets(content_insets_, window_scale()));
++  return bounds;
++}
++
++gfx::Rect WaylandToplevelWindow::GetBoundsRelativeToWindow() const {
++  gfx::Rect bounds(GetWindowBounds());
++  // Shift the bounds so that the origin is 0.
++  bounds.Offset(-bounds.OffsetFromOrigin());
++  // Then, applying a negative content inset will result in the outer bounds
++  // having a negative origin, meaning they are relative to the window.
++  bounds.Inset(-gfx::ScaleToRoundedInsets(content_insets_, window_scale()));
++  return bounds;
++}
++
+ void WaylandToplevelWindow::UpdateWindowScale(bool update_bounds) {
+   auto old_scale = window_scale();
+   WaylandWindow::UpdateWindowScale(update_bounds);
+@@ -305,7 +333,8 @@ void WaylandToplevelWindow::HandleToplevelConfigure(int32_t width,
+   // explicitly set the bounds to the current desired ones or the previous
+   // bounds.
+   if (width > 1 && height > 1) {
+-    pending_bounds_dip_ = gfx::Rect(0, 0, width, height);
++    pending_bounds_dip_ = gfx::Rect(0, 0, width + content_insets_.width(),
++                                    height + content_insets_.height());
+   } else if (is_normal) {
+     pending_bounds_dip_.set_size(
+         gfx::ScaleToRoundedSize(GetRestoredBoundsInPixels().IsEmpty()
+@@ -342,7 +371,7 @@ void WaylandToplevelWindow::HandleSurfaceConfigure(uint32_t serial) {
+     //     change window size will not cause the window to redraw.
+     // Hence, acknowledge this |configure| now to tell the Wayland compositor
+     // that this window has been configured.
+-    shell_toplevel()->SetWindowGeometry(pending_bounds_dip_);
++    UpdateWindowGeometry(pending_bounds_dip_);
+     shell_toplevel()->AckConfigure(serial);
+     connection()->ScheduleFlush();
+   } else if (!pending_configures_.empty() &&
+@@ -379,7 +408,7 @@ void WaylandToplevelWindow::UpdateVisualSize(const gfx::Size& size_px) {
+                    });
+ 
+   if (result != pending_configures_.end()) {
+-    shell_toplevel()->SetWindowGeometry(gfx::Rect(size_dip));
++    UpdateWindowGeometry(gfx::Rect(size_dip));
+     shell_toplevel()->AckConfigure(result->serial);
+     connection()->ScheduleFlush();
+     pending_configures_.erase(pending_configures_.begin(), ++result);
+@@ -579,6 +608,11 @@ void WaylandToplevelWindow::SetOrResetRestoredBounds() {
+   }
+ }
+ 
++void WaylandToplevelWindow::UpdateWindowGeometry(gfx::Rect bounds) {
++  bounds.Inset(content_insets_);
++  shell_toplevel()->SetWindowGeometry(bounds);
++}
++
+ void WaylandToplevelWindow::SetUpShellIntegration() {
+   // This method should be called after the XDG surface is initialized.
+   DCHECK(shell_toplevel_);
+diff --git a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+index 1282e995a36118a3491a42c453c53ee73cb1ff21..94ea15254e1263253546d60b8c5614835da1980c 100644
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+@@ -7,6 +7,7 @@
+ 
+ #include "base/containers/circular_deque.h"
+ #include "build/chromeos_buildflags.h"
++#include "ui/gfx/geometry/insets.h"
+ #include "ui/gfx/geometry/vector2d.h"
+ #include "ui/ozone/platform/wayland/host/wayland_window.h"
+ #include "ui/platform_window/extensions/wayland_extension.h"
+@@ -35,6 +36,8 @@ class WaylandToplevelWindow : public WaylandWindow,
+   // be called after processing all pending events in the wayland connection.
+   void ApplyPendingBounds();
+ 
++  void UpdateContentInsets(const gfx::Insets& insets);
++
+   // WmMoveResizeHandler
+   void DispatchHostWindowDragMovement(
+       int hittest,
+@@ -62,6 +65,9 @@ class WaylandToplevelWindow : public WaylandWindow,
+   // WaylandWindow overrides:
+   absl::optional<std::vector<gfx::Rect>> GetWindowShape() const override;
+ 
++  gfx::Rect GetWindowBounds() const override;
++  gfx::Rect GetBoundsRelativeToWindow() const override;
++
+  private:
+   // WaylandWindow overrides:
+   void UpdateWindowScale(bool update_bounds) override;
+@@ -109,6 +115,8 @@ class WaylandToplevelWindow : public WaylandWindow,
+ 
+   void SetOrResetRestoredBounds();
+ 
++  void UpdateWindowGeometry(gfx::Rect bounds_dip);
++
+   // Initializes additional shell integration, if the appropriate interfaces are
+   // available.
+   void SetUpShellIntegration();
+@@ -135,6 +143,10 @@ class WaylandToplevelWindow : public WaylandWindow,
+   // handler that receives DIP from Wayland.
+   gfx::Rect pending_bounds_dip_;
+ 
++  // This stores the insets used to exclude the region of the window that the
++  // client uses to draw border decorations (i.e. shadows).
++  gfx::Insets content_insets_;
++
+   // Contains the current state of the window.
+   PlatformWindowState state_;
+   // Contains the previous state of the window.
+diff --git a/ui/ozone/platform/wayland/host/wayland_window.cc b/ui/ozone/platform/wayland/host/wayland_window.cc
+index 18145f87a0115bc207f4d96ebc63603f8b63d869..837f32ff89f7ba1c9b18282374b4af02eaea6759 100644
+--- a/ui/ozone/platform/wayland/host/wayland_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_window.cc
+@@ -269,6 +269,14 @@ gfx::Rect WaylandWindow::GetBoundsInDIP() const {
+   return gfx::ScaleToRoundedRect(bounds_px_, 1.0 / window_scale());
+ }
+ 
++gfx::Rect WaylandWindow::GetWindowBounds() const {
++  return GetBounds();
++}
++
++gfx::Rect WaylandWindow::GetBoundsRelativeToWindow() const {
++  return GetBounds();
++}
++
+ void WaylandWindow::SetTitle(const std::u16string& title) {}
+ 
+ void WaylandWindow::SetCapture() {
+@@ -408,8 +416,8 @@ uint32_t WaylandWindow::DispatchEvent(const PlatformEvent& native_event) {
+     if (event_grabber &&
+         root_parent_window == event_grabber->GetRootParentWindow()) {
+       ConvertEventLocationToTargetWindowLocation(
+-          event_grabber->GetBounds().origin(), GetBounds().origin(),
+-          event->AsLocatedEvent());
++          event_grabber->GetBoundsRelativeToWindow().origin(),
++          GetBoundsRelativeToWindow().origin(), event->AsLocatedEvent());
+       return event_grabber->DispatchEventToDelegate(native_event);
+     }
+   }
+diff --git a/ui/ozone/platform/wayland/host/wayland_window.h b/ui/ozone/platform/wayland/host/wayland_window.h
+index e2e1db04e204a554887f06d1437ab63e2bf1f8a7..590141712c608c2c1e9500dde6e434ec847fce95 100644
+--- a/ui/ozone/platform/wayland/host/wayland_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_window.h
+@@ -232,6 +232,12 @@ class WaylandWindow : public PlatformWindow,
+   // Returns bounds in DIP.
+   gfx::Rect GetBoundsInDIP() const;
+ 
++  // Returns the "window bounds", that is, the bounds minus any content insets
++  // used to exclude shadows.
++  virtual gfx::Rect GetWindowBounds() const;
++  // Returns the outermost bounds, relative to the origin of the window bounds.
++  virtual gfx::Rect GetBoundsRelativeToWindow() const;
++
+  protected:
+   WaylandWindow(PlatformWindowDelegate* delegate,
+                 WaylandConnection* connection);
+diff --git a/ui/ozone/platform/wayland/host/xdg_popup_wrapper_impl.cc b/ui/ozone/platform/wayland/host/xdg_popup_wrapper_impl.cc
+index 855144c3e7343cd7af1519743bed9050943b36db..0c23f0f964e2eda44d0e12d61bd1583dc33e2aaa 100644
+--- a/ui/ozone/platform/wayland/host/xdg_popup_wrapper_impl.cc
++++ b/ui/ozone/platform/wayland/host/xdg_popup_wrapper_impl.cc
+@@ -200,7 +200,7 @@ struct xdg_positioner* XDGPopupWrapperImpl::CreatePositioner(
+   // Place anchor to the end of the possible position.
+   gfx::Rect anchor_rect = GetAnchorRect(
+       params.menu_type, params.bounds,
+-      gfx::ScaleToRoundedRect(parent_window->GetBounds(),
++      gfx::ScaleToRoundedRect(parent_window->GetWindowBounds(),
+                               1.0 / parent_window->window_scale()));
+ 
+   xdg_positioner_set_anchor_rect(positioner, anchor_rect.x(), anchor_rect.y(),
+diff --git a/ui/ozone/platform/wayland/host/zxdg_popup_v6_wrapper_impl.cc b/ui/ozone/platform/wayland/host/zxdg_popup_v6_wrapper_impl.cc
+index 9242fe394027d34da769a626d12b2fa5d8655a19..d48cf22b487a252dab2637fd180c173a907526ad 100644
+--- a/ui/ozone/platform/wayland/host/zxdg_popup_v6_wrapper_impl.cc
++++ b/ui/ozone/platform/wayland/host/zxdg_popup_v6_wrapper_impl.cc
+@@ -204,7 +204,7 @@ zxdg_positioner_v6* ZXDGPopupV6WrapperImpl::CreatePositioner(
+   // Place anchor to the end of the possible position.
+   gfx::Rect anchor_rect = GetAnchorRect(
+       params.menu_type, params.bounds,
+-      gfx::ScaleToRoundedRect(parent_window->GetBounds(),
++      gfx::ScaleToRoundedRect(parent_window->GetWindowBounds(),
+                               1.0 / parent_window->window_scale()));
+ 
+   zxdg_positioner_v6_set_anchor_rect(positioner, anchor_rect.x(),
