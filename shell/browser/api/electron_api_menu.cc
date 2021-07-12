@@ -212,7 +212,7 @@ void Menu::Clear() {
   model_->Clear();
 }
 
-int Menu::GetIndexOfCommandId(int command_id) {
+int Menu::GetIndexOfCommandId(int command_id) const {
   return model_->GetIndexOfCommandId(command_id);
 }
 
@@ -236,7 +236,7 @@ std::u16string Menu::GetToolTipAt(int index) const {
   return model_->GetToolTipAt(index);
 }
 
-#ifdef DCHECK_IS_ON
+#if DCHECK_IS_ON()
 std::u16string Menu::GetAcceleratorTextAtForTesting(int index) const {
   ui::Accelerator accelerator;
   model_->GetAcceleratorAtWithParams(index, true, &accelerator);
@@ -297,8 +297,11 @@ v8::Local<v8::ObjectTemplate> Menu::FillObjectTemplate(
       .SetMethod("isVisibleAt", &Menu::IsVisibleAt)
       .SetMethod("popupAt", &Menu::PopupAt)
       .SetMethod("closePopupAt", &Menu::ClosePopupAt)
-#ifdef DCHECK_IS_ON
+#if DCHECK_IS_ON()
       .SetMethod("getAcceleratorTextAt", &Menu::GetAcceleratorTextAtForTesting)
+#endif
+#if defined(OS_MAC)
+      .SetMethod("_getUserAcceleratorAt", &Menu::GetUserAcceleratorAt)
 #endif
       .Build();
 }

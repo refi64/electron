@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "content/public/renderer/render_frame.h"
 #include "electron/buildflags/buildflags.h"
+#include "net/http/http_request_headers.h"
 #include "shell/common/api/electron_bindings.h"
 #include "shell/common/gin_helper/dictionary.h"
 #include "shell/common/gin_helper/event_emitter_caller.h"
@@ -109,8 +110,11 @@ void ElectronRendererClient::DidCreateScriptContext(
       node_bindings_->CreateEnvironment(renderer_context, nullptr);
 
   // If we have disabled the site instance overrides we should prevent loading
-  // any non-context aware native module
-  env->set_force_context_aware(true);
+  // any non-context aware native module.
+  env->options()->force_context_aware = true;
+
+  // We do not want to crash the renderer process on unhandled rejections.
+  env->options()->unhandled_rejections = "warn";
 
   environments_.insert(env);
 
@@ -159,17 +163,6 @@ void ElectronRendererClient::WillReleaseScriptContext(
 
   // ElectronBindings is tracking node environments.
   electron_bindings_->EnvironmentDestroyed(env);
-}
-
-bool ElectronRendererClient::ShouldFork(blink::WebLocalFrame* frame,
-                                        const GURL& url,
-                                        const std::string& http_method,
-                                        bool is_server_redirect) {
-  // Handle all the navigations and reloads in browser.
-  // FIXME We only support GET here because http method will be ignored when
-  // the OpenURLFromTab is triggered, which means form posting would not work,
-  // we should solve this by patching Chromium in future.
-  return http_method == "GET";
 }
 
 void ElectronRendererClient::WorkerScriptReadyForEvaluationOnWorkerThread(
